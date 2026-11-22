@@ -31,7 +31,7 @@ jobs:
             build-essential gcc g++ make cmake pkg-config \
             autoconf automake autopoint gettext libtool libtool-bin \
             bison flex gawk gperf texinfo help2man python3 python3-docutils \
-            fakeroot cpio rsync xxd patch bc zlib1g-dev libgmp-dev \
+            fakeroot kmod cpio rsync xxd patch bc zlib1g-dev libgmp-dev \
             libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev
 
       - name: Fetch fixed source revision
@@ -94,6 +94,26 @@ jobs:
           cp linux-3.4.x/.config ../../results/kernel-effective.config
           cd ../../results
           sha256sum *.trx > firmware.sha256
+
+      - name: Diagnose optional SSH after baseline succeeds
+        id: ssh_diagnostic
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cd source/trunk
+          sed -i 's/^CONFIG_FIRMWARE_INCLUDE_DROPBEAR=n$/CONFIG_FIRMWARE_INCLUDE_DROPBEAR=y/' .config
+          fakeroot make user_only 2>&1 | tee ../../results/dropbear-build.log
+
+      - name: Preserve SSH configure diagnostics
+        if: always()
+        run: |
+          mkdir -p results
+          log=source/trunk/user/dropbear/dropbear-202X.XX/config.log
+          if [ -f "$log" ]; then
+            cp "$log" results/dropbear-config.log
+            grep -n -A 18 -B 5 'checking for deflate' "$log" || true
+          fi
+          printf 'SSH diagnostic outcome: %s\n' '${{ steps.ssh_diagnostic.outcome }}' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload firmware and diagnostic logs
         if: always()
