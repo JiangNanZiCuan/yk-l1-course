@@ -2,6 +2,10 @@ name: Build YK-L1 baseline
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-yk-l1.yml'
 
 permissions:
   contents: read
