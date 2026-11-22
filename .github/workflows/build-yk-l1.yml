@@ -1,4 +1,4 @@
-name: Build YK-L1 with SSH
+name: Build YK-L1 guessing game
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build-yk-l1.yml'
+      - 'coursework/**'
 
 permissions:
   contents: read
@@ -33,6 +34,16 @@ jobs:
             bison flex gawk gperf texinfo help2man python3 python3-docutils \
             fakeroot kmod cpio rsync xxd patch bc zlib1g-dev libgmp-dev \
             libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev
+
+      - name: Checkout coursework source
+        uses: actions/checkout@v4
+
+      - name: Test game rules and client syntax
+        run: |
+          mkdir -p results
+          gcc -std=c99 -Wall -Wextra -Werror coursework/test_logic.c -o /tmp/test_guess_logic
+          /tmp/test_guess_logic | tee results/game-logic-test.txt
+          gcc -std=c99 -Wall -Wextra -Werror -fsyntax-only coursework/guess_client.c
 
       - name: Fetch fixed source revision
         run: |
@@ -68,7 +79,7 @@ jobs:
           mkdir -p results
           cp source/trunk/configs/templates/YK-L1.config results/firmware-template.config
           cp source/trunk/configs/boards/YK-L1/kernel-3.4.x.config results/board-kernel.config
-          printf 'source=%s\ncommit=%s\nboard=YK-L1\nstage=SSH-enabled; hardware validation pending\n' \
+          printf 'source=%s\ncommit=%s\nboard=YK-L1\nstage=guess-game-with-SSH; hardware validation pending\n' \
             "$SOURCE_URL" "$SOURCE_COMMIT" > results/SOURCE.txt
 
       - name: Fix Dropbear stack protector feature detection
@@ -88,6 +99,12 @@ jobs:
           cd source
           git diff -- trunk/user/dropbear/dropbear-202X.XX/configure.ac > ../results/dropbear-stack-check.patch
 
+      - name: Integrate coursework kernel module and application
+        run: |
+          python3 coursework/integrate.py source/trunk
+          tar -czf results/game-source.tar.gz coursework
+          printf 'coursework_commit=%s\n' "$GITHUB_SHA" >> results/SOURCE.txt
+
       - name: Download cross compiler
         run: |
           cd source/toolchain-mipsel
@@ -99,7 +116,7 @@ jobs:
           tar -xJf toolchain.tar.xz -C toolchain-3.4.x
           toolchain-3.4.x/bin/mipsel-linux-uclibc-gcc --version
 
-      - name: Compile complete baseline firmware
+      - name: Compile complete game firmware
         run: |
           set -o pipefail
           cd source/trunk
@@ -113,6 +130,16 @@ jobs:
           test -x romfs/usr/bin/dropbearmulti
           file romfs/usr/bin/dropbearmulti | tee ../../results/dropbear-elf.txt
           cp romfs/usr/bin/dropbearmulti ../../results/
+          test -x romfs/usr/bin/guess_client
+          test -x romfs/sbin/guess_game_init.sh
+          game_module=$(find romfs/lib/modules -name guess_game.ko -type f)
+          test -n "$game_module"
+          file "$game_module" romfs/usr/bin/guess_client | tee ../../results/game-elf.txt
+          strings "$game_module" | grep '^vermagic=3.4.113' | tee ../../results/game-vermagic.txt
+          grep -q 'guess_game' romfs/lib/modules/3.4.113/modules.dep
+          cp "$game_module" ../../results/guess_game.ko
+          cp romfs/usr/bin/guess_client ../../results/
+          cp romfs/sbin/guess_game_init.sh ../../results/
           cd ../../results
           sha256sum *.trx > firmware.sha256
 
@@ -130,7 +157,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: YK-L1-SSH-${{ github.run_number }}
+          name: YK-L1-GuessGame-${{ github.run_number }}
           path: results/
           if-no-files-found: warn
           retention-days: 14
+
