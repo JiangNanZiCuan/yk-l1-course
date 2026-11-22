@@ -1,0 +1,102 @@
+name: Build YK-L1 baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      SOURCE_URL: https://github.com/a0575/padavan.git
+      SOURCE_COMMIT: 5c5563e6b056ad970d40567482b53bc0edd8b6f3
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl wget xz-utils unzip zip file \
+            build-essential gcc g++ make cmake pkg-config \
+            autoconf automake autopoint gettext libtool libtool-bin \
+            bison flex gawk gperf texinfo help2man python3 python3-docutils \
+            fakeroot cpio rsync xxd patch bc zlib1g-dev libgmp-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev
+
+      - name: Fetch fixed source revision
+        run: |
+          mkdir source
+          cd source
+          git init
+          git remote add origin "$SOURCE_URL"
+          git fetch --depth 1 origin "$SOURCE_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -f trunk/configs/templates/YK-L1.config
+          test -f trunk/configs/boards/YK-L1/kernel-3.4.x.config
+
+      - name: Prepare YK-L1 baseline configuration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('source/trunk/configs/templates/YK-L1.config')
+          keep = {'CONFIG_FIRMWARE_INCLUDE_LANG_CN',
+                  'CONFIG_FIRMWARE_INCLUDE_DROPBEAR'}
+          lines = []
+          for line in p.read_text().splitlines():
+              if line.startswith('CONFIG_FIRMWARE_INCLUDE_') and '=' in line:
+                  key = line.split('=', 1)[0]
+                  line = key + ('=y' if key in keep else '=n')
+              lines.append(line)
+          # The source template comments out DROPBEAR_FAST_CODE; no change needed.
+          text = '\n'.join(lines) + '\n'
+          assert 'CONFIG_FIRMWARE_PRODUCT_ID="YK-L1"' in text
+          assert 'CONFIG_LINUXDIR=linux-3.4.x' in text
+          p.write_text(text)
+          PY
+          mkdir -p results
+          cp source/trunk/configs/templates/YK-L1.config results/firmware-template.config
+          cp source/trunk/configs/boards/YK-L1/kernel-3.4.x.config results/board-kernel.config
+          printf 'source=%s\ncommit=%s\nboard=YK-L1\nstage=baseline; hardware validation pending\n' \
+            "$SOURCE_URL" "$SOURCE_COMMIT" > results/SOURCE.txt
+
+      - name: Download cross compiler
+        run: |
+          cd source/toolchain-mipsel
+          curl --fail --location --retry 3 \
+            https://github.com/hanwckf/padavan-toolchain/releases/download/v1.1/mipsel-linux-uclibc.tar.xz \
+            --output toolchain.tar.xz
+          sha256sum toolchain.tar.xz > ../../results/toolchain.sha256
+          mkdir -p toolchain-3.4.x
+          tar -xJf toolchain.tar.xz -C toolchain-3.4.x
+          toolchain-3.4.x/bin/mipsel-linux-uclibc-gcc --version
+
+      - name: Compile complete baseline firmware
+        run: |
+          set -o pipefail
+          cd source/trunk
+          fakeroot ./build_firmware_modify YK-L1 2>&1 | tee ../../results/build.log
+          shopt -s nullglob
+          images=(images/*.trx)
+          test "${#images[@]}" -gt 0
+          cp "${images[@]}" ../../results/
+          cp .config ../../results/firmware-effective.config
+          cp linux-3.4.x/.config ../../results/kernel-effective.config
+          cd ../../results
+          sha256sum *.trx > firmware.sha256
+
+      - name: Upload firmware and diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: YK-L1-baseline-${{ github.run_number }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 14
