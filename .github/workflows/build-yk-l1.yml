@@ -51,15 +51,14 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p = Path('source/trunk/configs/templates/YK-L1.config')
-          keep = {'CONFIG_FIRMWARE_INCLUDE_LANG_CN',
-                  'CONFIG_FIRMWARE_INCLUDE_DROPBEAR'}
+          keep = {'CONFIG_FIRMWARE_INCLUDE_LANG_CN'}
           lines = []
           for line in p.read_text().splitlines():
               if line.startswith('CONFIG_FIRMWARE_INCLUDE_') and '=' in line:
                   key = line.split('=', 1)[0]
                   line = key + ('=y' if key in keep else '=n')
               lines.append(line)
-          # The source template comments out DROPBEAR_FAST_CODE; no change needed.
+          # SSH is optional; keep the baseline limited to WebUI and console.
           text = '\n'.join(lines) + '\n'
           assert 'CONFIG_FIRMWARE_PRODUCT_ID="YK-L1"' in text
           assert 'CONFIG_LINUXDIR=linux-3.4.x' in text
