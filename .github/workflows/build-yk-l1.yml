@@ -1,4 +1,4 @@
-name: Build YK-L1 baseline
+name: Build YK-L1 with SSH
 
 on:
   workflow_dispatch:
@@ -51,14 +51,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p = Path('source/trunk/configs/templates/YK-L1.config')
-          keep = {'CONFIG_FIRMWARE_INCLUDE_LANG_CN'}
+          keep = {'CONFIG_FIRMWARE_INCLUDE_LANG_CN',
+                  'CONFIG_FIRMWARE_INCLUDE_DROPBEAR'}
           lines = []
           for line in p.read_text().splitlines():
               if line.startswith('CONFIG_FIRMWARE_INCLUDE_') and '=' in line:
                   key = line.split('=', 1)[0]
                   line = key + ('=y' if key in keep else '=n')
               lines.append(line)
-          # SSH is optional; keep the baseline limited to WebUI and console.
+          # Keep WebUI and SSH in the base firmware.
           text = '\n'.join(lines) + '\n'
           assert 'CONFIG_FIRMWARE_PRODUCT_ID="YK-L1"' in text
           assert 'CONFIG_LINUXDIR=linux-3.4.x' in text
@@ -67,8 +68,25 @@ jobs:
           mkdir -p results
           cp source/trunk/configs/templates/YK-L1.config results/firmware-template.config
           cp source/trunk/configs/boards/YK-L1/kernel-3.4.x.config results/board-kernel.config
-          printf 'source=%s\ncommit=%s\nboard=YK-L1\nstage=baseline; hardware validation pending\n' \
+          printf 'source=%s\ncommit=%s\nboard=YK-L1\nstage=SSH-enabled; hardware validation pending\n' \
             "$SOURCE_URL" "$SOURCE_COMMIT" > results/SOURCE.txt
+
+      - name: Fix Dropbear stack protector feature detection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('source/trunk/user/dropbear/dropbear-202X.XX/configure.ac')
+          text = p.read_text()
+          start = text.index('\t# stack protector.')
+          end = text.index('\t# FORTIFY_SOURCE', start)
+          block = text[start:end]
+          assert block.count('AC_COMPILE_IFELSE') == 2
+          # Compile-only tests accept the flag even when libssp is absent.
+          block = block.replace('AC_COMPILE_IFELSE', 'AC_LINK_IFELSE')
+          p.write_text(text[:start] + block + text[end:])
+          PY
+          cd source
+          git diff -- trunk/user/dropbear/dropbear-202X.XX/configure.ac > ../results/dropbear-stack-check.patch
 
       - name: Download cross compiler
         run: |
@@ -92,17 +110,11 @@ jobs:
           cp "${images[@]}" ../../results/
           cp .config ../../results/firmware-effective.config
           cp linux-3.4.x/.config ../../results/kernel-effective.config
+          test -x romfs/usr/bin/dropbearmulti
+          file romfs/usr/bin/dropbearmulti | tee ../../results/dropbear-elf.txt
+          cp romfs/usr/bin/dropbearmulti ../../results/
           cd ../../results
           sha256sum *.trx > firmware.sha256
-
-      - name: Diagnose optional SSH after baseline succeeds
-        id: ssh_diagnostic
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cd source/trunk
-          sed -i 's/^CONFIG_FIRMWARE_INCLUDE_DROPBEAR=n$/CONFIG_FIRMWARE_INCLUDE_DROPBEAR=y/' .config
-          fakeroot make user_only 2>&1 | tee ../../results/dropbear-build.log
 
       - name: Preserve SSH configure diagnostics
         if: always()
@@ -113,13 +125,12 @@ jobs:
             cp "$log" results/dropbear-config.log
             grep -n -A 18 -B 5 'checking for deflate' "$log" || true
           fi
-          printf 'SSH diagnostic outcome: %s\n' '${{ steps.ssh_diagnostic.outcome }}' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload firmware and diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: YK-L1-baseline-${{ github.run_number }}
+          name: YK-L1-SSH-${{ github.run_number }}
           path: results/
           if-no-files-found: warn
           retention-days: 14
