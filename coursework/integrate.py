@@ -19,10 +19,14 @@ p = trunk / 'user/Makefile'
 text = p.read_text()
 assert text.count('\nall:\n') == 1
 p.write_text(text.replace('\nall:\n', '\ndir_y += guess_game\n\nall:\n'))
-# Hook into firmware startup itself, so preserved /etc/storage scripts are irrelevant.
-p = trunk / 'user/rc/rc.c'
-text = p.read_text()
-anchor = '\tsystem("/etc/storage/started_script.sh &");'
-assert text.count(anchor) == 1
-p.write_text(text.replace(anchor, '\tsystem("/sbin/guess_game_init.sh &");\n' + anchor))
-print('Integrated guess_game.ko, guess_client and a firmware startup hook.')
+# Keep the module and application installed, but require manual loading while
+# hardware startup is being diagnosed. Enable autostart only after validation.
+if '--autostart' in sys.argv[2:]:
+    p = trunk / 'user/rc/rc.c'
+    text = p.read_text()
+    anchor = '\tsystem("/etc/storage/started_script.sh &");'
+    assert text.count(anchor) == 1
+    p.write_text(text.replace(anchor, '\tsystem("/sbin/guess_game_init.sh &");\n' + anchor))
+    print('Integrated game files with firmware startup hook.')
+else:
+    print('Integrated game files; manual launch: /sbin/guess_game_init.sh')
